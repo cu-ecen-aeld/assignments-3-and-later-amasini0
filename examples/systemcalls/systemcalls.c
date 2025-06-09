@@ -1,5 +1,12 @@
 #include "systemcalls.h"
 
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -9,13 +16,20 @@
 */
 bool do_system(const char *cmd)
 {
+    int ret = system(cmd);
+    if (ret == -1) {
+        perror("system");
+        return false;
+    }              
 
-/*
- * TODO  add your code here
- *  Call the system() function with the command set in the cmd
- *   and return a boolean true if the system() call completed with success
- *   or false() if it returned a failure
-*/
+    int status = WEXITSTATUS(ret);
+    if (status == 127) {
+        printf("system: child process shell could not be executed\n");
+        return false;
+    } else if (status != 0) {
+        printf("system: child process terminated with nonzero exit status: %d\n", status);
+        return false;
+    }
 
     return true;
 }
@@ -45,9 +59,7 @@ bool do_exec(int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
+    va_end(args);
 
 /*
  * TODO:
@@ -58,8 +70,33 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
+    int pid;
+    switch (pid = fork()) {
+        case -1:
+            perror("fork");
+            return false;
+        case 0:
+            // This executes in child process only
+            if (execv(command[0], command) == -1) {
+                perror("execv");
+                _exit(127);
+            }
+        default: 
+    }
 
-    va_end(args);
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
+        return false;
+    }
+
+    int exit_status = WEXITSTATUS(status);
+    if (exit_status == 127) {
+        return false;
+    } else if (exit_status != 0) {
+        printf("child process terminated with nonzero return value: %d\n", exit_status);
+        return false;
+    }
 
     return true;
 }
@@ -80,10 +117,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
+    va_end(args);
 
 /*
  * TODO
@@ -92,8 +126,49 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
+   
+    // Open output file
+    int fd = open(outputfile, O_WRONLY|O_CREAT|O_TRUNC,
+                  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd == -1) {
+        perror("open");
+        return false;
+    }
 
-    va_end(args);
+
+    int pid;
+    switch (pid = fork()) {
+        case -1:
+            perror("fork");
+            return false;
+        case 0:
+            // This executes in child process only
+            if (dup2(fd, 1) == -1) {
+                perror("dup2");
+                _exit(126);
+            }
+            close(fd);
+            if (execv(command[0], command) == -1) {
+                perror("execv");
+                _exit(127);
+            }
+        default:
+            close(fd);
+    }
+
+    int status;
+    if (waitpid(pid, &status, 0) == -1) {
+        perror("waitpid");
+        return false;
+    }
+
+    int exit_status = WEXITSTATUS(status);
+    if (exit_status == 126 || exit_status == 127) {
+        return false;
+    } else if (exit_status != 0) {
+        printf("child process terminated with nonzero exit value: %d\n", exit_status);
+        return false;
+    }
 
     return true;
 }
