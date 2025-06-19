@@ -1,12 +1,8 @@
-CROSS_COMPILE ?=
-
 # Compiler
-CC = $(CROSS_COMPILE)gcc
-CFLAGS = 
-
-# Linker
-LD = $(CROSS_COMPILE)gcc
-LDFLAGS = 
+CROSS_COMPILE ?=
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= 
+LDFLAGS ?= 
 
 # Targets
 SRC = writer.c
@@ -14,16 +10,16 @@ OBJ = $(SRC:.c=.o)
 EXE = $(SRC:.c=)
 
 # Rules
-.phony: default clean
+.phony: all clean
 
-default: $(EXE)
+all: $(EXE)
 
 clean:
 	rm -f $(EXE) $(OBJ)
 
 $(EXE): $(OBJ)
-	$(LD) -o $@ $(LDFLAGS) $<
+	$(CC) $(LDFLAGS) -o $@ $<
 
 %.o: %.c
-	$(CC) -c -o $@ $(CFLAGS) $<
+	$(CC) $(CFLAGS) -c $<
 
