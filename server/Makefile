@@ -8,9 +8,9 @@ CFLAGS += -Wall -Werror
 LDFLAGS ?=
 
 # Targets
-SRC = aesdsocket.c
-OBJ = $(SRC:.c=.o)
-EXE = $(SRC:.c=)	
+SRC = $(wildcard src/*.c)
+OBJ = $(SRC:src/%.c=%.o)
+EXE = aesdsocket
 
 # Rules
 .phony: all default clean
@@ -22,7 +22,7 @@ clean:
 	rm -f $(OBJ) $(EXE)
 
 $(EXE): $(OBJ)
-	$(CC) $(LDFLAGS) -o $@ $<
+	$(CC) $(LDFLAGS) -o $@ $^
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $<
+%.o: src/%.c
+	$(CC) $(CFLAGS) -o $@ -c $<
