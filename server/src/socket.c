@@ -9,9 +9,12 @@
 #include <string.h>
 #include <syslog.h>
 
-extern bool sig_received;
-
+// 
+// Contants.
 const size_t SOCK_READBUFSIZE = 64;
+//
+// Global variables.
+extern bool sig_exit;
 
 //
 // Creates a TCP socket that listens on the given port on all net interfaces.
@@ -95,7 +98,7 @@ char* sock_getline(int connection_fd) {
     while (!abort) {
         ssize_t count = recv(connection_fd, buffer, SOCK_READBUFSIZE, 0);
         if (count < 0) {
-            if (!sig_received) // Log error only if not handling exit signal.
+            if (!sig_exit) // Log error only if not handling exit signal.
                 syslog(LOG_ERR, "recv: %s", strerror(errno));
             abort = true;
             break;
@@ -147,14 +150,14 @@ char* sock_getline(int connection_fd) {
 // Sends a buffer of bytes (chars) via a socket handling possible partial sends.
 // On success, returns 0. On failure, returns -1.
 //
-int sock_putbytes(int sock_fd, char* buffer, size_t bufsize) {
+int sock_putchars(int sock_fd, char* buffer, size_t bufsize) {
     size_t bytes_left = bufsize;
     char* buf_head = buffer; // One after the last successfully sent byte.
 
     while (bytes_left > 0) {
         ssize_t bytes_sent = send(sock_fd, buf_head, bytes_left, 0);
         if (bytes_sent < 0) {
-            if (!sig_received) // Log error only if not handling exit signal.
+            if (!sig_exit) // Log error only if not handling exit signal.
                 syslog(LOG_ERR, "send: %s", strerror(errno));
             return -1;
         }
