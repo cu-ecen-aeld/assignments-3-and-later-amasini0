@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/queue.h>
-//#include <sys/types.h>
 #include <syslog.h>
 #include <unistd.h>
 
@@ -71,13 +70,18 @@ void* conn_handler(void* handler_arg) {
         goto cleanup;
     }
 
-    // Write to file then free string. After free, check write status and go to
-    // cleanup if necessary.
+    // Write to file, free string, then flush changes.
     int write_status = fputs(packet, file);
     free(packet);
     
     if (write_status < 0) {
-        syslog(LOG_ERR, "fputs: %s", "who knows");
+        syslog(LOG_ERR, "fputs: %s", strerror(errno));
+        abort = true;
+        goto cleanup;
+    }
+
+    if (fflush(file) < 0) {
+        syslog(LOG_ERR, "fflush: %s", strerror(errno));
         abort = true;
         goto cleanup;
     }
@@ -107,13 +111,13 @@ cleanup: // Close file and connection, then exit thread
     }
 
     // Finalize connection
-    if (close(connection->descriptor)) {
+    if (close(connection->descriptor) < 0) {
         syslog(LOG_ERR, "close: %s", strerror(errno));
         abort = true;
     }
     syslog(LOG_INFO, "Closed connection from %s", conn_host);
 
     connection->is_active = false;
-    int retval = abort ? -1 : 0;
-    pthread_exit(&retval);
+    connection->descriptor = abort ? -1 : 0; // Reuse as storage for retval.
+    pthread_exit(&connection->descriptor);
 }

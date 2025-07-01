@@ -24,6 +24,7 @@ bool sig_exit = false;
 // 
 // ...signal.c
 int sig_setexit(int);
+void* timer_handler(void*);
 //
 // ...socket.c
 int sock_create(const char*, const char*);
@@ -100,6 +101,24 @@ int main(int argc, char** argv) {
     syslog(LOG_INFO, "Server listening on %s port %s", sock_host, PORT);
     syslog(LOG_INFO, "Waiting for connections...");
 
+    // Block SIGALRM on master thread and all subsequently spawned threads,
+    // then spawn a dedicated thread with a timer
+    sigset_t sigalrm_mask;
+    sigemptyset(&sigalrm_mask);
+    sigaddset(&sigalrm_mask, SIGALRM);
+
+    error = pthread_sigmask(SIG_BLOCK, &sigalrm_mask, NULL);
+    if (error < 0) {
+        syslog(LOG_ERR, "pthread_sigmask: %s", strerror(error));
+        exit(-1);
+    }
+
+    pthread_t timer_thread;
+    if (pthread_create(&timer_thread, NULL, timer_handler, NULL) < 0) {
+        syslog(LOG_ERR, "pthread_create: %s", strerror(errno));
+        exit(-1);
+    }
+
     // Keep accepting connections until receiving either a SIGINT or a SIGTERM.
     // After accepting a new connection dispatch a thread that handles it, then
     // loop on all active threads to check if someone has finished.
@@ -108,7 +127,6 @@ int main(int argc, char** argv) {
     struct cl_entry* tail = NULL;
 
     bool abort = false; // Used skip to connection/program finalization.
-
 
     while(!abort) {
         int conn_fd = accept(sock_fd, NULL, NULL);
@@ -142,18 +160,19 @@ int main(int argc, char** argv) {
 
         while(current) {
             if (!current->is_active) {
-                void* retval;
-                error = pthread_join(current->thread, &retval);
+                int* retval;
+                error = pthread_join(current->thread, (void**)&retval);
                 if (error < 0) {
                     syslog(LOG_ERR, "pthread_join: %s", strerror(error));
                     abort = true;
                 }
-                if (*(int*)retval < 0) {
+                if (*retval < 0) {
                     syslog(LOG_ERR, "thread execution finished with error");
                     abort = true;
                 }
 
                 SLIST_REMOVE(&head, current, cl_entry, entries);
+                free(current);
 
                 // Set new current. If previous exists then set it as its next,
                 // otherwise it means that first elem was removed, and we set
@@ -175,16 +194,28 @@ int main(int argc, char** argv) {
     // Join all remaining threads (keep removing first element until empty).
     while (!SLIST_EMPTY(&head)) {
         struct cl_entry* connection = SLIST_FIRST(&head);
-        void* retval;
-        error = pthread_join(connection->thread, &retval);
+        int* retval;
+        error = pthread_join(connection->thread, (void**)&retval);
         if (error < 0) {
             syslog(LOG_ERR, "pthread_join: %s", strerror(error));
         }
-        if (*(int*)retval < 0) {
+        if (*retval < 0) {
             syslog(LOG_ERR, "thread execution finished with error");
             abort = true;
         }
         SLIST_REMOVE_HEAD(&head, entries);
+        free(connection);
+    }
+
+    // Kill timer thread.
+    error = pthread_kill(timer_thread, SIGTERM);
+    if (error < 0) {
+        syslog(LOG_ERR, "pthread_kill: %s", strerror(error));
+    }
+
+    error = pthread_join(timer_thread, NULL);
+    if (error < 0) {
+        syslog(LOG_ERR, "pthread_join: %s", strerror(error));
     }
 
     // Finalize program.

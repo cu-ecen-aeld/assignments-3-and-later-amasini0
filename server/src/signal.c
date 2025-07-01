@@ -1,10 +1,18 @@
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <time.h>
 
+//
+// Defs and constants.
+#define DATEFMT "timestamp:%Y_%m_%d_%H:%M:%S\n"
+#define DATESIZE 30
+extern const char* TMPFILE;
 //
 // Global variables.
 extern bool sig_exit;
@@ -34,4 +42,117 @@ int sig_setexit(int signo) {
 
     return 0;
 }
+
+//
+// Handler function for timer thread. 
+// and prints timestamp when one of such signals is received.
+//
+void* timer_handler(void*) {
+    bool abort = false;
+    int error;
+
+    // Create signal mask to block signals and handle via sigwait.
+    sigset_t block_mask;
+    sigemptyset(&block_mask);
+    sigaddset(&block_mask, SIGTERM);
+    sigaddset(&block_mask, SIGALRM);
+
+    error = pthread_sigmask(SIG_BLOCK, &block_mask, NULL);
+    if (error < 0) {
+        syslog(LOG_ERR, "pthread_sigmask: %s", strerror(error));
+        int retval = -1;
+        pthread_exit(&retval);
+    }
+
+    // Open file for printing timestamps.
+    FILE* file = fopen(TMPFILE, "a+");
+    if (!file) {
+        syslog(LOG_ERR, "fopen: %s", strerror(errno));
+        abort = true;
+        goto file_cleanup;
+    }
+
+    // Create timer and arm it (10s interval, first expires after 10s).
+    timer_t timer; 
+    if (timer_create(CLOCK_REALTIME, NULL, &timer) < 0) { 
+        syslog(LOG_ERR, "timer_create: %s", strerror(errno));
+        abort = true;
+        goto cleanup;
+    }
+
+    struct itimerspec ts;
+    ts.it_interval.tv_sec = 10;
+    ts.it_interval.tv_nsec = 0;
+    ts.it_value.tv_sec = 10;
+    ts.it_value.tv_nsec = 0;
+    if (timer_settime(timer, 0, &ts, NULL) < 0) {
+        syslog(LOG_ERR, "timer_settime: %s", strerror(errno));
+        abort = true;
+    }
+
+    // Wait for timer to expire and print timestamp on file.
+    int signo;
+    time_t now;
+    struct tm now_tm;
+    char now_str[DATESIZE+1];
+    now_str[DATESIZE] = '\0';
+
+    while (!sig_exit) {
+        if (sigwait(&block_mask, &signo) < 0) {
+            syslog(LOG_ERR, "sigwait: %s", strerror(errno));
+            abort = true;
+            goto cleanup;
+        }
+
+        if (signo == SIGTERM) {
+            goto cleanup;
+        }
+
+        now = time(NULL);
+        if (now == (time_t) -1) {
+            syslog(LOG_ERR, "time: %s", strerror(errno));     
+            abort = true;
+            goto cleanup;
+        }
+
+        if (!localtime_r(&now, &now_tm)) {
+            syslog(LOG_ERR, "localtime_r: %s", strerror(errno));
+            abort = true;
+            goto cleanup;
+        }
+
+        if (strftime(now_str, DATESIZE+1, DATEFMT, &now_tm) != DATESIZE) {
+            syslog(LOG_ERR, "strftime: %s", strerror(errno));
+            abort = true;
+            goto cleanup;
+        }
+        
+        if (fputs(now_str, file) < 0) {
+            syslog(LOG_ERR, "fputs: %s", strerror(errno));
+            abort = true;
+            goto cleanup;
+        }
+
+        if (fflush(file) < 0) {
+            syslog(LOG_ERR, "fflush: %s", strerror(errno));
+            abort = true;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    if (timer_delete(timer) < 0) {
+        syslog(LOG_ERR, "timer_delete: %s", strerror(errno));
+        abort = true;
+    }
+
+file_cleanup:
+    if (fclose(file) < 0) {
+        syslog(LOG_ERR, "fclose: %s", strerror(errno));
+        abort = true;
+    }
+
+    int retval = abort ? -1 : 0;
+    pthread_exit(&retval);
+} 
 

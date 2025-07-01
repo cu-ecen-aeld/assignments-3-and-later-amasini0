@@ -86,17 +86,19 @@ int sock_gethost(int sockfd, char* host, size_t hostlen) {
 // returns a NULL pointer.
 //
 char* sock_getline(int connection_fd) {
-    char buffer[SOCK_READBUFSIZE + 1];
+    char buffer[SOCK_READBUFSIZE+1];
     buffer[SOCK_READBUFSIZE] = '\0';
+    size_t buflen = sizeof(buffer) / sizeof(buffer[0]);
 
-    char* string = (char*) malloc(SOCK_READBUFSIZE * sizeof(*string));
-    size_t capacity = SOCK_READBUFSIZE; 
+    char* string = (char*) malloc(buflen * sizeof(*string));
+    size_t maxreadlen = buflen - 1;
+    size_t capacity = maxreadlen;
     size_t length = 0;
 
     bool abort = false; // Used to stop loop and cleanup allocated memory.
 
     while (!abort) {
-        ssize_t count = recv(connection_fd, buffer, SOCK_READBUFSIZE, 0);
+        ssize_t count = recv(connection_fd, buffer, maxreadlen, 0);
         if (count < 0) {
             if (!sig_exit) // Log error only if not handling exit signal.
                 syslog(LOG_ERR, "recv: %s", strerror(errno));
