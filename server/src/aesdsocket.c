@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <signal.h>
@@ -93,13 +94,20 @@ int main(int argc, char** argv) {
         syslog(LOG_ERR, "listen: %s", strerror(errno));
         exit(-1);
     }
-    
-    char sock_host[NI_MAXHOST];
-    if (sock_gethost(sock_fd, sock_host, sizeof(sock_host)) < 0) {
+    syslog(LOG_INFO, "Server listening on port %s", PORT);
+
+    // Set socket as nonblocking to avoid stalling while waiting connections.
+    int flags = fcntl(sock_fd, F_GETFL, 0);
+    if (flags < 0) {
+        syslog(LOG_ERR, "fcntl: %s", strerror(errno));
         exit(-1);
     }
-    syslog(LOG_INFO, "Server listening on %s port %s", sock_host, PORT);
-    syslog(LOG_INFO, "Waiting for connections...");
+
+    flags |= O_NONBLOCK;
+    if (fcntl(sock_fd, F_SETFL, flags) < 0) {
+        syslog(LOG_ERR, "fcntl: %s", strerror(errno));
+        exit(-1);
+    }
 
     // Block SIGALRM on master thread and all subsequently spawned threads,
     // then spawn a dedicated thread with a timer
@@ -128,31 +136,33 @@ int main(int argc, char** argv) {
 
     bool abort = false; // Used skip to connection/program finalization.
 
-    while(!abort) {
+    while(!abort && !sig_exit) {
         int conn_fd = accept(sock_fd, NULL, NULL);
-        if (conn_fd < 0) {
-            if (!sig_exit) // Log error only if not handling exit signal.
+        if (conn_fd < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                 syslog(LOG_ERR, "accept: %s", strerror(errno));
             abort = true;
             break;
         }
 
-        // Create thread and add it to the list
-        struct cl_entry* connection = malloc(sizeof(struct cl_entry));
-        connection->descriptor = conn_fd;
-        connection->is_active = true;
-        error = pthread_create(&connection->thread, NULL, conn_handler, (void*)connection);
-        if (error < 0 && error != EAGAIN) {
-            syslog(LOG_ERR, "pthread_create: %s", strerror(errno));
-            abort = true;
+        // Only if new connection was established, create new thread to handle
+        // it, and add it to the list.
+        if (conn_fd > 0) {
+            struct cl_entry* connection = malloc(sizeof(struct cl_entry));
+            connection->descriptor = conn_fd;
+            connection->is_active = true;
+            error = pthread_create(&connection->thread, NULL, conn_handler, (void*)connection);
+            if (error < 0 && error != EAGAIN) {
+                syslog(LOG_ERR, "pthread_create: %s", strerror(errno));
+                abort = true;
+            }
+            
+            if (tail) {
+                SLIST_INSERT_AFTER(tail, connection, entries);
+            } else {
+                SLIST_INSERT_HEAD(&head, connection, entries);
+            }
+            tail = connection;
         }
-        
-        if (tail) {
-            SLIST_INSERT_AFTER(tail, connection, entries);
-        } else {
-            SLIST_INSERT_HEAD(&head, connection, entries);
-        }
-        tail = connection;
 
         // Loop and join threads that completed execution.
         struct cl_entry* previous = NULL;

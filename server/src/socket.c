@@ -71,7 +71,7 @@ int sock_gethost(int sockfd, char* host, size_t hostlen) {
         return -1;
     }
 
-    int error = getnameinfo(&addr, addrlen, host, hostlen, NULL, 0, 0);
+    int error = getnameinfo(&addr, addrlen, host, hostlen, NULL, 0, NI_NUMERICHOST);
     if (error != 0) {
         syslog(LOG_ERR, "getnameinfo: %s", gai_strerror(error));
         return -1;
