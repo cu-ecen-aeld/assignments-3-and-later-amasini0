@@ -15,7 +15,12 @@
 // Defs and constants.
 #define PORT "9000"
 #define BACKLOG 10
+
+#ifndef USE_AESD_CHAR_DEVICE
 const char* TMPFILE = "/var/tmp/aesdsocketdata";
+#else 
+const char* TMPFILE = "/dev/aesdchar";
+#endif
 //
 // Global variables.
 bool sig_exit = false;
@@ -37,9 +42,10 @@ int daemonize(void);
 //
 // ...connection.c
 struct cl_entry {
-    pthread_t thread;
     int descriptor;
     bool is_active;
+    pthread_t thread;
+    pthread_mutex_t* io_mutex;
     SLIST_ENTRY(cl_entry) entries;
 };
 SLIST_HEAD(cl_head, cl_entry);
@@ -109,6 +115,10 @@ int main(int argc, char** argv) {
         exit(-1);
     }
 
+    // Create mutex to synchronize writes to file.
+    pthread_mutex_t write_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#ifndef USE_AESD_CHAR_DEVICE
     // Block SIGALRM on master thread and all subsequently spawned threads,
     // then spawn a dedicated thread with a timer
     sigset_t sigalrm_mask;
@@ -122,10 +132,11 @@ int main(int argc, char** argv) {
     }
 
     pthread_t timer_thread;
-    if (pthread_create(&timer_thread, NULL, timer_handler, NULL) < 0) {
+    if (pthread_create(&timer_thread, NULL, timer_handler, (void*)&write_mutex) < 0) {
         syslog(LOG_ERR, "pthread_create: %s", strerror(errno));
         exit(-1);
     }
+#endif
 
     // Keep accepting connections until receiving either a SIGINT or a SIGTERM.
     // After accepting a new connection dispatch a thread that handles it, then
@@ -150,6 +161,7 @@ int main(int argc, char** argv) {
             struct cl_entry* connection = malloc(sizeof(struct cl_entry));
             connection->descriptor = conn_fd;
             connection->is_active = true;
+            connection->io_mutex = &write_mutex;
             error = pthread_create(&connection->thread, NULL, conn_handler, (void*)connection);
             if (error < 0 && error != EAGAIN) {
                 syslog(LOG_ERR, "pthread_create: %s", strerror(errno));
@@ -217,6 +229,7 @@ int main(int argc, char** argv) {
         free(connection);
     }
 
+#ifndef USE_AESD_CHAR_DEVICE
     // Kill timer thread.
     error = pthread_kill(timer_thread, SIGTERM);
     if (error < 0) {
@@ -228,12 +241,14 @@ int main(int argc, char** argv) {
         syslog(LOG_ERR, "pthread_join: %s", strerror(error));
     }
 
-    // Finalize program.
+    // Remove temporary file (not for /dev/aesdchar).
     error = remove(TMPFILE);
     if (error < 0) {
         syslog(LOG_ERR, "remove: %s: %s", TMPFILE, strerror(errno));
     }
+#endif
 
+    // Finalize program.
     close(sock_fd);
     closelog();
 

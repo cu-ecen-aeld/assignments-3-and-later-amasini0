@@ -85,7 +85,7 @@ int sock_gethost(int sockfd, char* host, size_t hostlen) {
 // pointer to a dynamically allocated string containing the line. On failure,
 // returns a NULL pointer.
 //
-char* sock_getline(int connection_fd) {
+char* sock_getline(int connection_fd, size_t* out_length) {
     char buffer[SOCK_READBUFSIZE+1];
     buffer[SOCK_READBUFSIZE] = '\0';
     size_t buflen = sizeof(buffer) / sizeof(buffer[0]);
@@ -132,6 +132,7 @@ char* sock_getline(int connection_fd) {
         if (newline_pos) {
             *(newline_pos + 1) = '\0';
             strcpy(str_tail, buffer);
+            length += count;
             break;
         }
         
@@ -143,6 +144,12 @@ char* sock_getline(int connection_fd) {
     if (abort) {
         free(string);
         return NULL;
+    }
+
+    // Return length if length pointer is not null
+    if (out_length) {
+        *out_length = length;
+        syslog(LOG_INFO, "packet_len: %zd", length);
     }
 
     return string;

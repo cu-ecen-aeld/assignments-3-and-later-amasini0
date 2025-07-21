@@ -1,12 +1,14 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 
 //
 // Defs and constants.
@@ -47,7 +49,8 @@ int sig_setexit(int signo) {
 // Handler function for timer thread. 
 // and prints timestamp when one of such signals is received.
 //
-void* timer_handler(void*) {
+void* timer_handler(void* arg) {
+    pthread_mutex_t *io_mutex = (pthread_mutex_t*)arg;
     bool abort = false;
     int error;
 
@@ -65,9 +68,9 @@ void* timer_handler(void*) {
     }
 
     // Open file for printing timestamps.
-    FILE* file = fopen(TMPFILE, "a+");
-    if (!file) {
-        syslog(LOG_ERR, "fopen: %s", strerror(errno));
+    int fd = open(TMPFILE, O_WRONLY|O_APPEND|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+    if (fd < 0) {
+        syslog(LOG_ERR, "open: %s", strerror(errno));
         abort = true;
         goto file_cleanup;
     }
@@ -127,14 +130,30 @@ void* timer_handler(void*) {
             goto cleanup;
         }
         
-        if (fputs(now_str, file) < 0) {
-            syslog(LOG_ERR, "fputs: %s", strerror(errno));
-            abort = true;
-            goto cleanup;
+        size_t bytes_remaining = DATESIZE;
+        ssize_t bytes_written = 0;
+        char* str_tail = now_str;
+        error = pthread_mutex_lock(io_mutex);
+        if (error == 0) {
+            while (bytes_remaining > 0) {
+                bytes_written = write(fd, str_tail, bytes_remaining);
+                if (bytes_written < 0) {
+                    syslog(LOG_ERR, "write: %s", strerror(errno));
+                    break;
+                }
+                bytes_remaining -= bytes_written;
+                str_tail += bytes_written;
+            }
+
+            error = pthread_mutex_unlock(io_mutex);
+            if (error != 0) {
+                syslog(LOG_ERR, "pthread_mutex_unlock: %s", strerror(error));
+            }
+        } else {
+            syslog(LOG_ERR, "pthread_mutex_lock: %s", strerror(error));
         }
 
-        if (fflush(file) < 0) {
-            syslog(LOG_ERR, "fflush: %s", strerror(errno));
+        if (error != 0 || bytes_written < 0) {
             abort = true;
             goto cleanup;
         }
@@ -147,8 +166,8 @@ cleanup:
     }
 
 file_cleanup:
-    if (fclose(file) < 0) {
-        syslog(LOG_ERR, "fclose: %s", strerror(errno));
+    if (close(fd) < 0) {
+        syslog(LOG_ERR, "close: %s", strerror(errno));
         abort = true;
     }
 

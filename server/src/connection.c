@@ -1,11 +1,12 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/queue.h>
+#include <sys/types.h>
 #include <syslog.h>
 #include <unistd.h>
 
@@ -19,7 +20,7 @@ extern const char* TMPFILE;
 //
 // ...socket.c
 int sock_gethost(int, char*, size_t);
-char* sock_getline(int);
+char* sock_getline(int, size_t*);
 int sock_putchars(int, char*, size_t);
 
 //
@@ -27,9 +28,10 @@ int sock_putchars(int, char*, size_t);
 //
 // ...connections linked list entry
 struct cl_entry {
-    pthread_t thread;
     int descriptor;
     bool is_active;
+    pthread_t thread;
+    pthread_mutex_t* io_mutex;
     SLIST_ENTRY(cl_entry) entries;
 };
 //
@@ -46,6 +48,7 @@ void* conn_handler(void* handler_arg) {
     // Recover arguments structure.
     struct cl_entry* connection = (struct cl_entry*) handler_arg;
     bool abort = false;
+    int error;
 
     char conn_host[NI_MAXHOST];
     if (sock_gethost(connection->descriptor, conn_host, sizeof(conn_host)) < 0) {
@@ -54,8 +57,9 @@ void* conn_handler(void* handler_arg) {
     syslog(LOG_INFO, "Accepted connection from %s", conn_host);
 
     // Open temporary file.
-    FILE* file = fopen(TMPFILE, "a+");
-    if (!file) {
+    int fd = open(TMPFILE, O_RDWR|O_APPEND|O_CREAT, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+    if (fd < 0) {
+        syslog(LOG_ERR, "open: %s", strerror(errno));
         abort = true;
         goto cleanup;
     }
@@ -64,53 +68,74 @@ void* conn_handler(void* handler_arg) {
     // the character stream obtained from the socket.
     // If the packet is received correctly write its contend to file, then
     // free memory. Otherwise stop execution.
-    char* packet = sock_getline(connection->descriptor);
+    // After packet is received, write to end of tmpfile.
+    size_t bytes_remaining;
+    char* packet = sock_getline(connection->descriptor, &bytes_remaining);
     if (!packet) {
         abort = true;
         goto cleanup;
     }
-
-    // Write to file, free string, then flush changes.
-    int write_status = fputs(packet, file);
-    free(packet);
     
-    if (write_status < 0) {
-        syslog(LOG_ERR, "fputs: %s", strerror(errno));
-        abort = true;
-        goto cleanup;
+    syslog(LOG_INFO, "packet: %s, len: %zd", packet, bytes_remaining);
+
+    ssize_t bytes_written;
+    char* packet_head = packet;
+    error = pthread_mutex_lock(connection->io_mutex);
+    if (error == 0) { // if locked
+        while (bytes_remaining > 0) {
+            bytes_written = write(fd, packet_head, bytes_remaining);
+            if (bytes_written < 0) {
+                syslog(LOG_ERR, "write: %s", strerror(errno));
+                break;
+            }
+            bytes_remaining -= bytes_written;
+            packet_head += bytes_written;
+        }
+
+        //fsync(fd);
+        error = pthread_mutex_unlock(connection->io_mutex);
+        if (error != 0) {
+            syslog(LOG_ERR, "pthread_mutex_unlock: %s", strerror(error));
+        }
+    } else { 
+        syslog(LOG_ERR, "pthread_mutex_lock: %s", strerror(error));
     }
 
-    if (fflush(file) < 0) {
-        syslog(LOG_ERR, "fflush: %s", strerror(errno));
+    free(packet);
+
+    if (error != 0 || bytes_written < 0) {
         abort = true;
         goto cleanup;
     }
 
     // Send the whole content of the file to the connected client.
     char buffer[CONN_BUFSIZE];
-    fseek(file, 0, SEEK_SET);
+    if (lseek(fd, 0, SEEK_SET) == (off_t) -1) {
+        syslog(LOG_ERR, "lseek: %s", strerror(errno));
+        abort = true;
+        goto cleanup;
+    }
 
-    while (!feof(file)) {
-        size_t count = fread(buffer, 1, sizeof(buffer), file);
-        if (ferror(file)) {
-            syslog(LOG_ERR, "fread: %s", strerror(errno));
-            abort = true;
-            goto cleanup;
-        }
-
-        if (sock_putchars(connection->descriptor, buffer, count) < 0) {
+    ssize_t bytes_read;
+    while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
+        if (sock_putchars(connection->descriptor, buffer, bytes_read) < 0) {
             abort = true;
             goto cleanup;
         }
     }
 
-cleanup: // Close file and connection, then exit thread
-    if (fclose(file) != 0) {
-        syslog(LOG_ERR, "fclose: %s", strerror(errno));
+    if (bytes_read < 0) {
+        syslog(LOG_ERR, "read: %s", strerror(errno));
         abort = true;
     }
 
-    // Finalize connection
+cleanup: 
+    // Close file and connection, then exit thread
+    if (close(fd) < 0) {
+        syslog(LOG_ERR, "close: %s", strerror(errno));
+        abort = true;
+    }
+
     if (close(connection->descriptor) < 0) {
         syslog(LOG_ERR, "close: %s", strerror(errno));
         abort = true;
