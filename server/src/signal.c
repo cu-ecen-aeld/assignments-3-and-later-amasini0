@@ -20,6 +20,12 @@ extern const char* TMPFILE;
 extern bool sig_exit;
 
 //
+// Declarations of objects with external linkage defined in other source files.
+//
+// ...utils.c
+int putchars(int, char*, size_t);
+
+//
 // Handler to update flag when signal is received.
 //
 void _exit_handler(int) {
@@ -130,20 +136,10 @@ void* timer_handler(void* arg) {
             goto cleanup;
         }
         
-        size_t bytes_remaining = DATESIZE;
-        ssize_t bytes_written = 0;
-        char* str_tail = now_str;
         error = pthread_mutex_lock(io_mutex);
+        int write_status = 0;
         if (error == 0) {
-            while (bytes_remaining > 0) {
-                bytes_written = write(fd, str_tail, bytes_remaining);
-                if (bytes_written < 0) {
-                    syslog(LOG_ERR, "write: %s", strerror(errno));
-                    break;
-                }
-                bytes_remaining -= bytes_written;
-                str_tail += bytes_written;
-            }
+            write_status = putchars(fd, now_str, DATESIZE);
 
             error = pthread_mutex_unlock(io_mutex);
             if (error != 0) {
@@ -153,7 +149,7 @@ void* timer_handler(void* arg) {
             syslog(LOG_ERR, "pthread_mutex_lock: %s", strerror(error));
         }
 
-        if (error != 0 || bytes_written < 0) {
+        if (error != 0 || write_status < 0) {
             abort = true;
             goto cleanup;
         }

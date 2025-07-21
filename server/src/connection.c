@@ -22,6 +22,9 @@ extern const char* TMPFILE;
 int sock_gethost(int, char*, size_t);
 char* sock_getline(int, size_t*);
 int sock_putchars(int, char*, size_t);
+//
+// ...utils.c
+int putchars(int, char*, size_t);
 
 //
 // Connection management
@@ -69,30 +72,22 @@ void* conn_handler(void* handler_arg) {
     // If the packet is received correctly write its contend to file, then
     // free memory. Otherwise stop execution.
     // After packet is received, write to end of tmpfile.
-    size_t bytes_remaining;
-    char* packet = sock_getline(connection->descriptor, &bytes_remaining);
+    size_t packet_size;
+    char* packet = sock_getline(connection->descriptor, &packet_size);
     if (!packet) {
         abort = true;
         goto cleanup;
     }
+    syslog(LOG_INFO, "received %zu bytes from %s", packet_size, conn_host);
     
-    syslog(LOG_INFO, "packet: %s, len: %zd", packet, bytes_remaining);
-
-    ssize_t bytes_written;
-    char* packet_head = packet;
     error = pthread_mutex_lock(connection->io_mutex);
+    int write_status = 0;
     if (error == 0) { // if locked
-        while (bytes_remaining > 0) {
-            bytes_written = write(fd, packet_head, bytes_remaining);
-            if (bytes_written < 0) {
-                syslog(LOG_ERR, "write: %s", strerror(errno));
-                break;
-            }
-            bytes_remaining -= bytes_written;
-            packet_head += bytes_written;
+        write_status = putchars(fd, packet, packet_size);
+        if (write_status == 0) {
+            syslog(LOG_INFO, "bytes written to %s", TMPFILE);
         }
 
-        //fsync(fd);
         error = pthread_mutex_unlock(connection->io_mutex);
         if (error != 0) {
             syslog(LOG_ERR, "pthread_mutex_unlock: %s", strerror(error));
@@ -100,10 +95,10 @@ void* conn_handler(void* handler_arg) {
     } else { 
         syslog(LOG_ERR, "pthread_mutex_lock: %s", strerror(error));
     }
-
+    
     free(packet);
 
-    if (error != 0 || bytes_written < 0) {
+    if (error != 0 || write_status < 0) {
         abort = true;
         goto cleanup;
     }

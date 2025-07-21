@@ -56,3 +56,25 @@ int daemonize(void) {
     return 0;
 }
 
+// 
+// Writes a buffer of bytes (chars) to a file handling possible parial sends.
+// On success, returns 0. On failure, returns -1.
+//
+int putchars(int fd, char* buffer, size_t bufsize) {
+    size_t bytes_left = bufsize;
+    char* buf_head = buffer; // One after the last successfully sent byte.
+    ssize_t bytes_sent = 0;
+
+    while (bytes_left > 0) {
+        bytes_sent = write(fd, buf_head, bytes_left);
+        if (bytes_sent < 0) {
+            syslog(LOG_ERR, "write: %s", strerror(errno));
+            return -1;
+        }
+
+        bytes_left -= bytes_sent;
+        buf_head += bytes_sent;
+    }
+
+    return 0;
+}

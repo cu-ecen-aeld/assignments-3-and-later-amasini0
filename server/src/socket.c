@@ -149,7 +149,6 @@ char* sock_getline(int connection_fd, size_t* out_length) {
     // Return length if length pointer is not null
     if (out_length) {
         *out_length = length;
-        syslog(LOG_INFO, "packet_len: %zd", length);
     }
 
     return string;
@@ -162,17 +161,18 @@ char* sock_getline(int connection_fd, size_t* out_length) {
 int sock_putchars(int sock_fd, char* buffer, size_t bufsize) {
     size_t bytes_left = bufsize;
     char* buf_head = buffer; // One after the last successfully sent byte.
+    ssize_t bytes_sent = 0;
 
     while (bytes_left > 0) {
-        ssize_t bytes_sent = send(sock_fd, buf_head, bytes_left, 0);
+        bytes_sent = send(sock_fd, buf_head, bytes_left, 0);
         if (bytes_sent < 0) {
             if (!sig_exit) // Log error only if not handling exit signal.
                 syslog(LOG_ERR, "send: %s", strerror(errno));
             return -1;
         }
 
-        buf_head += bytes_sent;
         bytes_left -= bytes_sent;
+        buf_head += bytes_sent;
     }
 
     return 0;
