@@ -32,10 +32,8 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
     size_t *entry_offset_byte_rtn )
 {
     /**
-    * TODO: implement per description
+    * DONE: implement per description
     */
-#ifdef __KERNEL__
-#else
     size_t acc_length = 0;
     size_t offset = buffer->out_offs;
     size_t current_pos;
@@ -52,7 +50,6 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
            
         acc_length += buffer->entry[current_pos].size;
     }
-#endif
 
     return NULL;
 }
@@ -64,16 +61,20 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
 */
-void aesd_circular_buffer_add_entry(
+const char *aesd_circular_buffer_add_entry(
     struct aesd_circular_buffer *buffer, 
     const struct aesd_buffer_entry *add_entry )
 {
     /**
-    * TODO: implement per description
+    * DONE: implement per description
     */
-#ifdef __KERNEL__
-#else
-    // Write input.
+    //Store old entry text pointer if present.
+    const char *removed_buffptr = NULL;
+    if (buffer->entry[buffer->in_offs].buffptr) {
+        removed_buffptr = buffer->entry[buffer->in_offs].buffptr;
+    }
+
+    // Write new entry.
     buffer->entry[buffer->in_offs] = *add_entry;
     buffer->in_offs += 1;
 
@@ -87,7 +88,8 @@ void aesd_circular_buffer_add_entry(
     if (buffer->full) {
         buffer->out_offs = buffer->in_offs;
     }
-#endif
+
+    return removed_buffptr;
 }
 
 /**
