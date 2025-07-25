@@ -227,11 +227,15 @@ void aesd_cleanup_module(void)
      */
     if (aesd_device.buffer) {
         AESD_CIRCULAR_BUFFER_FOREACH(entry, aesd_device.buffer, index){
-            if (entry) {
-                kfree(entry);
+            if (entry->buffptr) {
+                kfree(entry->buffptr);
             }
         }
         kfree(aesd_device.buffer);
+    }
+
+    if (aesd_device.wip_entry.buffptr) {
+        kfree(aesd_device.wip_entry.buffptr);
     }
 
     unregister_chrdev_region(devno, 1);
