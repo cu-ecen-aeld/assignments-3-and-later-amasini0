@@ -105,11 +105,14 @@ void* conn_handler(void* handler_arg) {
 
     // Send the whole content of the file to the connected client.
     char buffer[CONN_BUFSIZE];
+
+#ifndef USE_AESD_CHAR_DEVICE
     if (lseek(fd, 0, SEEK_SET) == (off_t) -1) {
         syslog(LOG_ERR, "lseek: %s", strerror(errno));
         abort = true;
         goto cleanup;
     }
+#endif
 
     ssize_t bytes_read;
     while ((bytes_read = read(fd, buffer, sizeof(buffer))) > 0) {
