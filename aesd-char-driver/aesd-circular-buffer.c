@@ -99,3 +99,23 @@ void aesd_circular_buffer_init(struct aesd_circular_buffer* buffer)
 {
     memset(buffer,0,sizeof(struct aesd_circular_buffer));
 }
+
+/**
+* Computer the total size of the circular buffer 
+*/
+size_t aesd_circular_buffer_size(struct aesd_circular_buffer *buffer) {
+    struct aesd_buffer_entry *entry;
+    uint8_t offset = buffer->out_offs;
+    uint8_t current_pos;
+
+    size_t buffer_size = 0;
+
+    for (uint8_t i = 0; i < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; ++i) {
+        current_pos = (offset + i) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+        entry = &buffer->entry[current_pos];
+        buffer_size += entry->size;
+    }
+
+    return buffer_size;
+}
+
